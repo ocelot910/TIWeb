@@ -6,6 +6,7 @@ const romSize = 512 * 1024;
 const chunkSize = 0x840 * 64 * 32;
 const chunkCount = 32;
 const flashSize = chunkSize * chunkCount;
+const localFlashParts = ["installed1", "installed2"];
 const chunks = Array.from({ length: chunkCount }, (_, i) => i);
 const moduleReady = createTi2({
   print: (line) => console.debug(line),
@@ -154,16 +155,45 @@ function start() {
   step();
 }
 
+async function fetchLocal(name) {
+  try {
+    const response = await fetch(new URL(`./${name}`, self.location.href), { cache: "no-store" });
+    return response.ok ? await response.blob() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadLocalFlash() {
+  const parts = await Promise.all(localFlashParts.map(fetchLocal));
+  if (parts.every(Boolean)) {
+    const total = parts.reduce((sum, part) => sum + part.size, 0);
+    if (total !== flashSize) {
+      throw new Error(
+        `${localFlashParts.join(" + ")} total ${total} bytes, expected ${flashSize}.`
+      );
+    }
+    // installed1 is the first half, installed2 the second — joining them rebuilds flash.img.
+    return new Blob(parts);
+  }
+
+  // Backwards-compatible single-file fallback.
+  const single = await fetchLocal("installed");
+  if (single && single.size === flashSize) return single;
+  return null;
+}
+
 async function loadLocalImages() {
   try {
-    const rom = await fetch(new URL("./boot1", self.location.href), { cache: "no-store" });
-    if (!rom.ok) return false;
-    const romFile = await rom.blob();
-    if (romFile.size !== romSize) return false;
+    const romFile = await fetchLocal("boot1");
+    if (!romFile || romFile.size !== romSize) return false;
+
     report("loading", "Loading local calculator files…");
-    const flash = await fetch(new URL("./installed", self.location.href), { cache: "no-store" });
-    if (!flash.ok) return false;
-    await install(romFile, await flash.blob());
+
+    const flash = await loadLocalFlash();
+    if (!flash) return false;
+
+    await install(romFile, flash);
     return true;
   } catch (error) {
     console.warn("Could not load local calculator images:", error);
