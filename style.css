@@ -1,0 +1,55 @@
+:root {
+  color-scheme: dark;
+  background: #151921;
+  color: #eef3f8;
+  font: 15px system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+main { max-width: 894px; margin: 0 auto; padding: 16px; }
+header {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  column-gap: 12px; margin-bottom: 12px;
+}
+h1 { font-size: 1.35rem; margin: 0; }
+h1 span { color: #98b9d5; font-weight: 500; }
+#status { grid-column: 1 / -1; margin: 5px 0 0; color: #bdcbd8; min-height: 1.4em; }
+#setup { display: grid; gap: 10px; margin-bottom: 14px; background: #242c38; padding: 12px; border-radius: 8px; }
+#setup label { display: grid; gap: 4px; }
+#calculator {
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 16px;
+  padding: 12px; background: #242c38; border: 1px solid #3c4c60; border-radius: 14px;
+}
+#lcd {
+  width: min(100%, 480px); height: auto; display: block;
+  background: #0b1017; border-radius: 5px; image-rendering: auto; touch-action: none;
+}
+#keypad { position: relative; width: min(100%, 340px); }
+#keypad img { display: block; width: 100%; height: auto; pointer-events: none; }
+button {
+  color: inherit; background: #39485c; border: 1px solid #596b82; border-radius: 6px;
+  min-height: 34px; padding: 2px; font: inherit; font-size: .86rem; cursor: pointer;
+}
+#keypad button, #touchpad {
+  position: absolute;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+#keypad button { background: transparent; border: 0; min-height: 0; padding: 0; }
+button:focus-visible { outline: 2px solid #a9ddff; outline-offset: 2px; }
+#keypad button[data-pressed] { background: #5eacdf66; }
+@media (hover: hover) {
+  #keypad button:hover { box-shadow: inset 0 0 0 1px #5eacdfaa; }
+}
+#touchpad {
+  left: 31.15%; top: 12.23%; width: 37.7%; height: 20%;
+  overflow: hidden; border-radius: 14%; cursor: crosshair;
+}
+#contact { position: absolute; pointer-events: none; width: 10px; height: 10px; background: #5eacdf; border-radius: 50%; transform: translate(-50%, -50%); }
+#contact[data-down] { background: #f5dc72; }
+#save { grid-area: 1 / 2; padding: 0 12px; white-space: nowrap; }
+#save[data-unsaved] { color: #211c0e; background: #f5dc72; border-color: #f5dc72; }
+@media (max-width: 360px) {
+  main { padding: 8px; }
+  #calculator { padding: 8px; }
+}

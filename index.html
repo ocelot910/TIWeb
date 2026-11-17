@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ti2 · CX II CAS</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+<main>
+  <header>
+    <h1>ti2 <span>CX II CAS</span></h1>
+    <button id="save" type="button" hidden>Save now</button>
+    <p id="status" role="status">Opening local storage…</p>
+  </header>
+  <form id="setup" hidden>
+    <label>Boot ROM <input name="rom" type="file" required></label>
+    <label>Installed flash image <input name="flash" type="file" required></label>
+    <button>Save and start</button>
+  </form>
+  <section id="calculator" aria-label="Calculator">
+    <canvas id="lcd" width="320" height="240" aria-label="Calculator display"></canvas>
+    <div id="keypad">
+      <img src="keypad.svg" width="252" height="386" alt="" draggable="false">
+      <div id="touchpad" role="group" aria-label="Touchpad. Drag to move the cursor, tap an edge to navigate, or tap the center to select.">
+        <span id="contact" hidden></span>
+      </div>
+    </div>
+  </section>
+</main>
+</html>
