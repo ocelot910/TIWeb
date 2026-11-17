@@ -225,12 +225,18 @@ function screenPoint(event, clamp = false) {
   if (x >= 0 && x < screen.width && y >= 0 && y < screen.height) return [x, y];
 }
 
-const pointerEvent = { move: 1, down: 2, up: 4, grabDown: 6, grabUp: 8 };
+const pointerEvent = { move: 1, down: 2, up: 4, grabDown: 6, grabUp: 8, rightClick: 10 };
 function sendPointer(event, [x, y]) {
   worker.postMessage({ type: "pointer", event, x, y });
 }
 
 let screenTap;
+screen.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  if (!absolutePointer || screenTap) return;
+  const point = screenPoint(event);
+  if (point) sendPointer(pointerEvent.rightClick, point);
+});
 screen.addEventListener("pointerdown", (event) => {
   if (!absolutePointer || !event.isPrimary || event.button !== 0 || screenTap) return;
   const point = screenPoint(event);
