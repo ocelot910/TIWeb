@@ -155,7 +155,6 @@ function start() {
 }
 
 async function loadLocalImages() {
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(self.location.hostname)) return false;
   try {
     const rom = await fetch(new URL("./boot1", self.location.href), { cache: "no-store" });
     if (!rom.ok) return false;
