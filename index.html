@@ -7,13 +7,35 @@
 <script type="module" src="app.js"></script>
 <main>
   <header>
-    <h1>ti2 <span>CX II CAS</span></h1>
-    <button id="save" type="button" hidden>Save now</button>
-    <p id="status" role="status">Opening local storage…</p>
+    <div class="header-title">
+      <h1>ti2 <span>CX II CAS</span></h1>
+      <p id="status" role="status">Opening local storage…</p>
+    </div>
+    <div id="toolbar" hidden>
+      <button id="import" type="button">Import</button>
+      <button id="export" type="button">Export</button>
+      <button id="save" type="button" disabled>Saved</button>
+    </div>
   </header>
+  <dialog id="documents" aria-labelledby="documents-title">
+    <div class="documents-header">
+      <h2 id="documents-title"></h2>
+      <form method="dialog"><button id="documents-close">Close</button></form>
+    </div>
+    <div class="document-location">
+      <button id="documents-up" type="button">Up</button>
+      <span id="documents-path"></span>
+    </div>
+    <p id="documents-status" role="status"></p>
+    <ul id="document-list"></ul>
+    <form id="document-import">
+      <label>Document (.tns) <input type="file" accept=".tns" required></label>
+      <button id="import-here">Import here</button>
+    </form>
+  </dialog>
   <form id="setup" hidden>
     <label>Boot ROM <input name="rom" type="file" required></label>
-    <label>Installed flash image <input name="flash" type="file" required></label>
+    <label>Installed flash image or both split parts <input name="flash" type="file" multiple required></label>
     <button>Save and start</button>
   </form>
   <section id="calculator" aria-label="Calculator">

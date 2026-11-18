@@ -6,11 +6,21 @@ const romSize = 512 * 1024;
 const chunkSize = 0x840 * 64 * 32;
 const chunkCount = 32;
 const flashSize = chunkSize * chunkCount;
-const localFlashParts = ["installed1", "installed2"];
 const chunks = Array.from({ length: chunkCount }, (_, i) => i);
+const transferPath = "/transfer.tns";
 const moduleReady = createTi2({
   print: (line) => console.debug(line),
   printErr: (line) => console.warn(line),
+  onDocumentEntry(name, directory) {
+    documentTransfer?.entries.push({ name, directory });
+    renewDocumentTimeout();
+  },
+  onDocumentProgress(progress) {
+    if (!documentTransfer) return;
+    if (progress < 0) finishDocumentTransfer(new Error("The calculator rejected the file operation."));
+    else if (progress === 100) finishDocumentTransfer();
+    else renewDocumentTimeout();
+  },
 });
 
 let emu;
@@ -22,9 +32,95 @@ let pendingChunks = 0;
 let unsaved = false;
 let lastFrame = 0;
 let lastSave = 0;
+let documentTransfer;
+let handlingDocuments = false;
 
 function report(type, message) {
   self.postMessage({ type, message });
+}
+
+function finishDocumentTransfer(error) {
+  const transfer = documentTransfer;
+  documentTransfer = undefined;
+  clearTimeout(transfer.timeout);
+  if (error) transfer.reject(error);
+  else transfer.resolve(transfer.entries);
+}
+
+function renewDocumentTimeout() {
+  if (!documentTransfer) return;
+  clearTimeout(documentTransfer.timeout);
+  documentTransfer.timeout = setTimeout(() => {
+    finishDocumentTransfer(new Error("The calculator did not respond. Close any calculator dialog and try again."));
+    emu._browser_reset_document_link();
+  }, 30000);
+}
+
+function transferDocument(operation, path) {
+  return new Promise((resolve, reject) => {
+    documentTransfer = { entries: [], resolve, reject };
+    renewDocumentTimeout();
+    try {
+      emu.ccall("browser_" + operation + "_document" + (operation === "list" ? "s" : ""),
+        null, ["string"], [path]);
+    } catch (error) {
+      finishDocumentTransfer(error);
+    }
+  });
+}
+
+function validDocumentName(name) {
+  return typeof name === "string" && name !== "" && name !== "." && name !== ".." &&
+    !/[\\/\x00-\x1f]/u.test(name);
+}
+
+function checkDocumentPath(path) {
+  if (typeof path !== "string" || !path.startsWith("/") ||
+      (path !== "/" && !path.slice(1).split("/").every(validDocumentName)) ||
+      new TextEncoder().encode(path).length > 251) {
+    throw new Error("The calculator path is invalid or too long.");
+  }
+}
+
+async function handleDocuments({ operation, path, file }) {
+  if (handlingDocuments) return;
+  handlingDocuments = true;
+  try {
+    checkDocumentPath(path);
+    if (operation === "list") {
+      const entries = await transferDocument("list", path);
+      self.postMessage({ type: "documents", entries: entries.filter(entry => validDocumentName(entry.name)) });
+      return;
+    }
+    if (operation === "import") {
+      if (!file || !validDocumentName(file.name) || !/\.tns$/i.test(file.name) || !file.size) {
+        throw new Error("Choose a nonempty .tns file.");
+      }
+      const target = (path === "/" ? "" : path) + "/" + file.name;
+      checkDocumentPath(target);
+      const entries = await transferDocument("list", path);
+      if (entries.some(({ name }) => name.toLowerCase() === file.name.toLowerCase())) {
+        throw new Error("This folder already contains a file or folder with that name.");
+      }
+      emu.FS.writeFile(transferPath, new Uint8Array(await file.arrayBuffer()), { canOwn: true });
+      await transferDocument("import", target);
+      self.postMessage({ type: "documents", imported: file.name });
+      void save();
+      return;
+    }
+    if (operation === "export" && path !== "/") {
+      await transferDocument("export", path);
+      const bytes = emu.FS.readFile(transferPath);
+      self.postMessage({ type: "documents", exported: path.split("/").at(-1), bytes }, [bytes.buffer]);
+      return;
+    }
+    throw new Error("Choose a calculator document.");
+  } catch (error) {
+    self.postMessage({ type: "documents", error: error.message });
+  } finally {
+    if (emu.FS.analyzePath(transferPath).exists) emu.FS.unlink(transferPath);
+    handlingDocuments = false;
+  }
 }
 
 function openDatabase() {
@@ -155,45 +251,22 @@ function start() {
   step();
 }
 
-async function fetchLocal(name) {
-  try {
-    const response = await fetch(new URL(`./${name}`, self.location.href), { cache: "no-store" });
-    return response.ok ? await response.blob() : null;
-  } catch {
-    return null;
-  }
-}
-
-async function loadLocalFlash() {
-  const parts = await Promise.all(localFlashParts.map(fetchLocal));
-  if (parts.every(Boolean)) {
-    const total = parts.reduce((sum, part) => sum + part.size, 0);
-    if (total !== flashSize) {
-      throw new Error(
-        `${localFlashParts.join(" + ")} total ${total} bytes, expected ${flashSize}.`
-      );
-    }
-    // installed1 is the first half, installed2 the second — joining them rebuilds flash.img.
-    return new Blob(parts);
-  }
-
-  // Backwards-compatible single-file fallback.
-  const single = await fetchLocal("installed");
-  if (single && single.size === flashSize) return single;
-  return null;
-}
-
 async function loadLocalImages() {
+  const fetchImage = async (name) => {
+    const response = await fetch(new URL("./" + name, self.location.href), { cache: "no-store" });
+    return response.ok ? response.blob() : null;
+  };
   try {
-    const romFile = await fetchLocal("boot1");
-    if (!romFile || romFile.size !== romSize) return false;
-
+    const rom = await fetchImage("boot1");
+    if (rom?.size !== romSize) return false;
     report("loading", "Loading local calculator files…");
-
-    const flash = await loadLocalFlash();
-    if (!flash) return false;
-
-    await install(romFile, flash);
+    let flash = await fetchImage("installed");
+    if (flash?.size !== flashSize) {
+      const [first, second] = await Promise.all([fetchImage("installed1"), fetchImage("installed2")]);
+      if (!first?.size || !second?.size || first.size + second.size !== flashSize) return false;
+      flash = new Blob([first, second]);
+    }
+    await install(rom, flash);
     return true;
   } catch (error) {
     console.warn("Could not load local calculator images:", error);
@@ -221,7 +294,7 @@ async function initialize() {
 
 async function install(rom, flash) {
   try {
-    if (rom.size !== romSize || flash.size !== flashSize) {
+    if (rom?.size !== romSize || flash?.size !== flashSize) {
       throw new Error("Expected a 512 KiB Boot ROM and a 132 MiB ti2 flash image.");
     }
     const [romData, flashData] = await Promise.all([rom.arrayBuffer(), flash.arrayBuffer()]);
@@ -235,13 +308,24 @@ async function install(rom, flash) {
   }
 }
 
+function installSelectedFiles(rom, files) {
+  if (files.length === 1) return install(rom, files[0]);
+  if (files.length === 2) {
+    const first = files.find(file => /^installed1(?:\.[^.]+)*$/i.test(file.name));
+    const second = files.find(file => /^installed2(?:\.[^.]+)*$/i.test(file.name));
+    if (first?.size && second?.size) return install(rom, new Blob([first, second]));
+  }
+  report("setup", "Select a single installed flash image or both installed1 and installed2.");
+}
+
 self.onmessage = ({ data }) => {
-  if (data.type === "install") void install(data.rom, data.flash);
+  if (data.type === "install") void installSelectedFiles(data.rom, data.flashFiles ?? [data.flash]);
   if (!running) return;
   if (data.type === "key") emu._browser_key(data.id, data.down);
   if (data.type === "touch") emu._browser_touch(data.x, data.y, data.contact, data.down);
   if (data.type === "pointer") emu._browser_pointer(data.event, data.x, data.y);
   if (data.type === "save") void save(data.showStatus);
+  if (data.type === "documents") void handleDocuments(data);
 };
 
 function startWithStorage() {

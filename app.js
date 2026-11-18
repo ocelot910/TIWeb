@@ -2,6 +2,16 @@ const worker = new Worker(new URL("./worker.js", import.meta.url));
 const status = document.querySelector("#status");
 const setup = document.querySelector("#setup");
 const save = document.querySelector("#save");
+const toolbar = document.querySelector("#toolbar");
+const documents = document.querySelector("#documents");
+const documentsTitle = document.querySelector("#documents-title");
+const documentsStatus = document.querySelector("#documents-status");
+const documentsPath = document.querySelector("#documents-path");
+const documentsUp = document.querySelector("#documents-up");
+const documentsClose = document.querySelector("#documents-close");
+const documentList = document.querySelector("#document-list");
+const documentImport = document.querySelector("#document-import");
+const importHere = document.querySelector("#import-here");
 const lcd = document.querySelector("#lcd").getContext("2d");
 const screen = lcd.canvas;
 const touchpad = document.querySelector("#touchpad");
@@ -12,6 +22,8 @@ const keyboard = new Map();
 const tapDuration = 75;
 let running = false;
 let absolutePointer = false;
+let unsaved = false;
+let savePending = false;
 
 // Hit areas use the original SVG's 252 × 386 coordinate system.
 const keys = [
@@ -278,7 +290,7 @@ for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
 }
 
 window.addEventListener("keydown", (event) => {
-  if (!running || event.metaKey || event.altKey ||
+  if (!running || documents.open || event.metaKey || event.altKey ||
       (event.ctrlKey && ["r", "l", "w", "t"].includes(event.key.toLowerCase()))) return;
   if (event.target.closest?.("button, input") && ["Enter", " ", "Tab"].includes(event.key)) return;
   const direction = directions.get(event.key);
@@ -326,11 +338,13 @@ setup.addEventListener("submit", (event) => {
   setup.querySelector("button").disabled = true;
   status.textContent = "Saving images on this device…";
   worker.postMessage({
-    type: "install", rom: setup.elements.rom.files[0], flash: setup.elements.flash.files[0],
+    type: "install", rom: setup.elements.rom.files[0], flashFiles: [...setup.elements.flash.files],
   });
 });
 
 save.addEventListener("click", () => {
+  savePending = true;
+  updateSaveButton();
   status.textContent = "Saving…";
   worker.postMessage({ type: "save", showStatus: true });
 });
@@ -343,12 +357,114 @@ function warnBeforeLeaving(event) {
   event.returnValue = true;
 }
 
+function updateSaveButton() {
+  save.textContent = savePending ? "Saving…" : unsaved ? "Save now" : "Saved";
+  save.disabled = savePending || !unsaved;
+}
+
+let documentMode;
+let currentFolder;
+let requestedFolder;
+let documentBusy = false;
+
+function setDocumentBusy(busy) {
+  documentBusy = busy;
+  documentsClose.disabled = busy;
+  documentsUp.disabled = busy || !currentFolder || currentFolder === "/";
+  importHere.disabled = busy || !currentFolder;
+  documentList.querySelectorAll("button").forEach(button => { button.disabled = busy; });
+}
+
+function requestDocuments(operation, path, message, file) {
+  setDocumentBusy(true);
+  documentsStatus.textContent = message;
+  worker.postMessage({ type: "documents", operation, path, file });
+}
+
+function openFolder(path) {
+  requestedFolder = path;
+  requestDocuments("list", path, "Reading calculator folders…");
+}
+
+for (const mode of ["import", "export"]) {
+  document.querySelector("#" + mode).addEventListener("click", () => {
+    documentMode = mode;
+    currentFolder = undefined;
+    documentsTitle.textContent = mode === "import" ? "Import to calculator" : "Export from calculator";
+    documentsPath.textContent = "/";
+    documentList.replaceChildren();
+    documentImport.reset();
+    documentImport.hidden = mode !== "import";
+    documents.showModal();
+    openFolder("/");
+  });
+}
+
+documents.addEventListener("cancel", event => {
+  if (documentBusy) event.preventDefault();
+});
+documentsUp.addEventListener("click", () => {
+  openFolder(currentFolder.slice(0, currentFolder.lastIndexOf("/")) || "/");
+});
+documentImport.addEventListener("submit", event => {
+  event.preventDefault();
+  const file = documentImport.querySelector("input").files[0];
+  if (file && /\.tns$/i.test(file.name)) {
+    requestDocuments("import", currentFolder, "Importing " + file.name + "…", file);
+  } else {
+    documentsStatus.textContent = "Choose a .tns file.";
+  }
+});
+
+function displayDocuments(data) {
+  if (data.entries) {
+    currentFolder = requestedFolder;
+    documentsPath.textContent = currentFolder;
+    documentList.replaceChildren();
+    const entries = data.entries.filter(entry => entry.directory || documentMode === "export");
+    entries.sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = entry.name + (entry.directory ? "/" : "");
+      button.addEventListener("click", () => {
+        const path = (currentFolder === "/" ? "" : currentFolder) + "/" + entry.name;
+        if (entry.directory) openFolder(path);
+        else requestDocuments("export", path, "Exporting " + entry.name + "…");
+      });
+      item.append(button);
+      documentList.append(item);
+    }
+    documentsStatus.textContent = entries.length ? "" : documentMode === "import" ?
+      "No subfolders here." : "This folder is empty.";
+  } else if (data.imported) {
+    documentImport.reset();
+    documentsStatus.textContent = "Imported " + data.imported + ".";
+  } else if (data.exported) {
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(new Blob([data.bytes], { type: "application/octet-stream" }));
+    link.href = url;
+    link.download = data.exported;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    documentsStatus.textContent = "Exported " + data.exported + ".";
+  } else {
+    documentsStatus.textContent = data.error;
+  }
+  setDocumentBusy(false);
+}
+
 worker.addEventListener("message", ({ data }) => {
+  if (data.type === "documents") {
+    displayDocuments(data);
+    return;
+  }
   if (data.type === "save-state") {
-    save.toggleAttribute("data-unsaved", data.unsaved);
-    if (data.unsaved) save.setAttribute("aria-label", "Save now, changes pending");
-    else save.removeAttribute("aria-label");
-    if (data.unsaved) window.addEventListener("beforeunload", warnBeforeLeaving);
+    unsaved = data.unsaved;
+    if (!unsaved) savePending = false;
+    updateSaveButton();
+    if (unsaved) window.addEventListener("beforeunload", warnBeforeLeaving);
     else window.removeEventListener("beforeunload", warnBeforeLeaving);
     return;
   }
@@ -358,6 +474,10 @@ worker.addEventListener("message", ({ data }) => {
     lcd.putImageData(new ImageData(frame, screen.width, screen.height), 0, 0);
     return;
   }
+  if (data.type === "error" || data.type === "saved") {
+    savePending = false;
+    updateSaveButton();
+  }
   status.textContent = data.message;
   if (data.type === "setup") {
     setup.hidden = false;
@@ -365,7 +485,7 @@ worker.addEventListener("message", ({ data }) => {
   } else if (data.type === "running") {
     running = true;
     setup.hidden = true;
-    save.hidden = false;
+    toolbar.hidden = false;
   }
 });
 worker.addEventListener("error", () => {
