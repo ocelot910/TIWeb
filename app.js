@@ -183,7 +183,9 @@ function position(event) {
 touchpad.addEventListener("pointerdown", (event) => {
   if (!running || gesture || event.button !== 0) return;
   event.preventDefault();
+  stopWheelScroll();
   clearTimeout(tapRelease);
+  tapRelease = undefined;
   activeArrow = null;
   touchpad.setPointerCapture(event.pointerId);
   const start = {
@@ -215,7 +217,10 @@ function finishGesture(event) {
   clearTimeout(hold);
   if (event.type === "pointerup" && !moved && !down) {
     setTouch(...point, true, true);
-    tapRelease = setTimeout(() => setTouch(...point, false, false), tapDuration);
+    tapRelease = setTimeout(() => {
+      tapRelease = undefined;
+      setTouch(...point, false, false);
+    }, tapDuration);
   } else {
     setTouch(...point, false, false);
   }
@@ -243,9 +248,59 @@ function sendPointer(event, [x, y]) {
 }
 
 let screenTap;
+let wheelRemainder = 0;
+let wheelSteps = 0;
+let lastWheel = -Infinity;
+let wheelRelease;
+let wheelNext;
+
+function stopWheelScroll() {
+  if (wheelRelease !== undefined) {
+    clearTimeout(wheelRelease);
+    setTouch(.5, .5, false, false);
+  }
+  clearTimeout(wheelNext);
+  wheelRelease = wheelNext = undefined;
+  wheelRemainder = wheelSteps = 0;
+}
+
+function advanceWheelScroll() {
+  wheelNext = undefined;
+  if (!wheelSteps) return;
+  const direction = Math.sign(wheelSteps);
+  wheelSteps -= direction;
+  const point = directions.get(direction > 0 ? "ArrowDown" : "ArrowUp");
+  setTouch(...point, true, true);
+  wheelRelease = setTimeout(() => {
+    wheelRelease = undefined;
+    setTouch(...point, false, false);
+    wheelNext = setTimeout(advanceWheelScroll, 40);
+  }, tapDuration);
+}
+
+screen.addEventListener("wheel", (event) => {
+  if (!running || documents.open || event.ctrlKey || event.metaKey ||
+      !event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+  event.preventDefault();
+  if (gesture || activeArrow || screenTap || tapRelease !== undefined) return;
+
+  const units = event.deltaMode === 1 ? event.deltaY :
+    event.deltaMode === 2 ? event.deltaY * 3 : event.deltaY / 80;
+  if (event.timeStamp - lastWheel > 250 || Math.sign(units) !== Math.sign(wheelRemainder || wheelSteps || units)) {
+    wheelRemainder = wheelSteps = 0;
+  }
+  lastWheel = event.timeStamp;
+  wheelRemainder += units;
+  const steps = Math.trunc(wheelRemainder);
+  wheelRemainder -= steps;
+  wheelSteps = Math.max(-6, Math.min(6, wheelSteps + steps));
+  if (wheelRelease === undefined && wheelNext === undefined) advanceWheelScroll();
+}, { passive: false });
+
 screen.addEventListener("contextmenu", (event) => {
   event.preventDefault();
   if (!absolutePointer || screenTap) return;
+  stopWheelScroll();
   const point = screenPoint(event);
   if (point) sendPointer(pointerEvent.rightClick, point);
 });
@@ -253,6 +308,7 @@ screen.addEventListener("pointerdown", (event) => {
   if (!absolutePointer || !event.isPrimary || event.button !== 0 || screenTap) return;
   const point = screenPoint(event);
   if (!point) return;
+  stopWheelScroll();
   screenTap = { id: event.pointerId, start: point, point };
   screen.setPointerCapture(event.pointerId);
   sendPointer(pointerEvent.move, point);
@@ -298,9 +354,11 @@ window.addEventListener("keydown", (event) => {
   if (!direction && id === undefined) return;
   event.preventDefault();
   if (event.repeat) return;
+  stopWheelScroll();
   if (direction) {
     if (!gesture) {
       clearTimeout(tapRelease);
+      tapRelease = undefined;
       activeArrow = event.code;
       setTouch(...direction, true, true);
     }
@@ -321,6 +379,7 @@ window.addEventListener("keyup", (event) => {
 });
 
 window.addEventListener("blur", () => {
+  stopWheelScroll();
   if (screenTap?.moved) sendPointer(pointerEvent.grabUp, screenTap.point);
   screenTap = undefined;
   for (const [id, sources] of pressed) {
@@ -329,6 +388,7 @@ window.addEventListener("blur", () => {
   hostKeys.clear();
   clearTimeout(gesture?.hold);
   clearTimeout(tapRelease);
+  tapRelease = undefined;
   gesture = activeArrow = null;
   setTouch(.5, .5, false, false);
 });
@@ -388,6 +448,7 @@ function openFolder(path) {
 
 for (const mode of ["import", "export"]) {
   document.querySelector("#" + mode).addEventListener("click", () => {
+    stopWheelScroll();
     documentMode = mode;
     currentFolder = undefined;
     documentsTitle.textContent = mode === "import" ? "Import to calculator" : "Export from calculator";

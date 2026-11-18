@@ -35,6 +35,8 @@ let lastSave = 0;
 let documentTransfer;
 let handlingDocuments = false;
 
+class DocumentLinkTimeout extends Error {}
+
 function report(type, message) {
   self.postMessage({ type, message });
 }
@@ -47,19 +49,19 @@ function finishDocumentTransfer(error) {
   else transfer.resolve(transfer.entries);
 }
 
-function renewDocumentTimeout() {
+function renewDocumentTimeout(delay = 30000) {
   if (!documentTransfer) return;
   clearTimeout(documentTransfer.timeout);
   documentTransfer.timeout = setTimeout(() => {
-    finishDocumentTransfer(new Error("The calculator did not respond. Close any calculator dialog and try again."));
+    finishDocumentTransfer(new DocumentLinkTimeout("The calculator’s file link stopped responding."));
     emu._browser_reset_document_link();
-  }, 30000);
+  }, delay);
 }
 
 function transferDocument(operation, path) {
   return new Promise((resolve, reject) => {
     documentTransfer = { entries: [], resolve, reject };
-    renewDocumentTimeout();
+    renewDocumentTimeout(8000);
     try {
       emu.ccall("browser_" + operation + "_document" + (operation === "list" ? "s" : ""),
         null, ["string"], [path]);
@@ -67,6 +69,44 @@ function transferDocument(operation, path) {
       finishDocumentTransfer(error);
     }
   });
+}
+
+async function readDocumentLink(operation, path) {
+  try {
+    return await transferDocument(operation, path);
+  } catch (error) {
+    if (!(error instanceof DocumentLinkTimeout)) throw error;
+    return transferDocument(operation, path);
+  }
+}
+
+function hasDocumentName(entries, name) {
+  return entries.some(entry => entry.name.toLowerCase() === name.toLowerCase());
+}
+
+async function importDocument(folder, target, file) {
+  const entries = await readDocumentLink("list", folder);
+  if (hasDocumentName(entries, file.name)) {
+    throw new Error("This folder already contains a file or folder with that name.");
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  emu.FS.writeFile(transferPath, bytes);
+  try {
+    await transferDocument("import", target);
+  } catch (error) {
+    if (!(error instanceof DocumentLinkTimeout)) throw error;
+    // A lost acknowledgement can leave a complete file on the calculator.
+    const refreshed = await readDocumentLink("list", folder);
+    if (!hasDocumentName(refreshed, file.name)) {
+      await transferDocument("import", target);
+      return;
+    }
+    await readDocumentLink("export", target);
+    const received = emu.FS.readFile(transferPath);
+    if (received.length !== bytes.length || !received.every((byte, index) => byte === bytes[index])) {
+      throw new Error("The file link stopped during import. Check the copy in the destination folder.");
+    }
+  }
 }
 
 function validDocumentName(name) {
@@ -88,7 +128,7 @@ async function handleDocuments({ operation, path, file }) {
   try {
     checkDocumentPath(path);
     if (operation === "list") {
-      const entries = await transferDocument("list", path);
+      const entries = await readDocumentLink("list", path);
       self.postMessage({ type: "documents", entries: entries.filter(entry => validDocumentName(entry.name)) });
       return;
     }
@@ -98,18 +138,13 @@ async function handleDocuments({ operation, path, file }) {
       }
       const target = (path === "/" ? "" : path) + "/" + file.name;
       checkDocumentPath(target);
-      const entries = await transferDocument("list", path);
-      if (entries.some(({ name }) => name.toLowerCase() === file.name.toLowerCase())) {
-        throw new Error("This folder already contains a file or folder with that name.");
-      }
-      emu.FS.writeFile(transferPath, new Uint8Array(await file.arrayBuffer()), { canOwn: true });
-      await transferDocument("import", target);
+      await importDocument(path, target, file);
       self.postMessage({ type: "documents", imported: file.name });
       void save();
       return;
     }
     if (operation === "export" && path !== "/") {
-      await transferDocument("export", path);
+      await readDocumentLink("export", path);
       const bytes = emu.FS.readFile(transferPath);
       self.postMessage({ type: "documents", exported: path.split("/").at(-1), bytes }, [bytes.buffer]);
       return;
